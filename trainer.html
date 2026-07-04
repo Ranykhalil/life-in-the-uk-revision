@@ -135,6 +135,15 @@ h1{font-size:22px;margin:0;letter-spacing:-.01em}
   font-size:17px;font-weight:700}
 .next.check{background:var(--blue);color:#fff}
 
+/* ---------- flags & shortcuts ---------- */
+.row2{display:flex;gap:10px}
+.row2 .big{flex:1;margin-top:10px;font-size:15px}
+.fbtn{flex:none;background:none;border:none;font-size:17px;line-height:1;color:var(--hair);
+  padding:2px 4px;align-self:center}
+.fbtn.on{color:var(--orange)}
+.qflag{margin-left:auto;background:var(--card);border:1.5px solid var(--hair);border-radius:999px;
+  font-size:12.5px;font-weight:600;padding:4px 12px;color:var(--muted)}
+.qflag.on{background:var(--orange);border-color:var(--orange);color:#fff}
 /* ---------- browse ---------- */
 .frow{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 0}
 .frow .tchip{padding:5px 11px;font-size:12.5px}
@@ -206,6 +215,10 @@ button:focus-visible{outline:3px solid var(--cyan);outline-offset:2px}
     <button class="big alt" id="weakBtn">Drill my weak spots <small id="weakSub"></small></button>
     <button class="big alt" id="wrongBtn">Questions I’ve got wrong <small id="wrongSub"></small></button>
     <button class="big alt" id="allBtn">All questions &amp; stats <small>browse, filter, and test any slice</small></button>
+    <div class="row2">
+      <button class="big alt" id="unseenBtn">Unseen <small id="unseenSub"></small></button>
+      <button class="big alt" id="flaggedBtn">⚑ Flagged <small id="flaggedSub"></small></button>
+    </div>
 
     <div id="storeWarn" class="notice hidden">Heads up: this view can’t save progress between visits. Open the standalone file or hosted version to keep your history.</div>
 
@@ -215,7 +228,8 @@ button:focus-visible{outline:3px solid var(--cyan);outline-offset:2px}
       <p><b>Immediate correction</b> — get it wrong and you see the right answer, then the question quietly returns 8–12 cards later (no warning — that’s deliberate), and once more ~15–20 cards after that. Only two spaced correct answers clear it.</p>
       <p><b>Spacing</b> — each question lives in a zone (1→5). Right answers move it up; the app waits longer each time before re-asking (15 min → 2 h → 12 h → 2 days). A wrong answer sends it back to Zone 1.</p>
       <p><b>Known = proven, then retired</b> — a question only counts as known (Zone 4+) after several separate, spaced correct answers. Once proven it stops appearing, so training time goes to the questions you’ve been getting wrong.</p>
-      <p><b>Interleaving &amp; shuffling</b> — topics mix together and answer options shuffle every time, so you learn the facts, not the button positions.</p>
+      <p><b>Flags</b> — tap ⚑ on any question (during the quiz or in the lists) to mark it as one you want help with. Filter by ⚑ Flagged in the questions screen and test just those.</p>
+<p><b>Interleaving &amp; shuffling</b> — topics mix together and answer options shuffle every time, so you learn the facts, not the button positions.</p>
     </details>
 
     <div class="settings">
@@ -234,6 +248,7 @@ button:focus-visible{outline:3px solid var(--cyan);outline-offset:2px}
     </div>
     <div class="meta">
       <span class="tpill" id="tpill"></span>
+      <button class="qflag" id="qflagBtn" aria-pressed="false">⚑ flag</button>
     </div>
     <p class="qtext" id="qtext"></p>
     <p class="pick" id="pick"></p>
@@ -288,7 +303,7 @@ function load(){
   return { items:{}, totalAnswers:0 };
 }
 function save(){ if(store){ try{ store.setItem(KEY, JSON.stringify(S)); }catch(e){} } }
-function it(i){ return S.items[i] || (S.items[i] = {b:0, due:0, s:0, w:0}); }
+function it(i){ return S.items[i] || (S.items[i] = {b:0, due:0, s:0, w:0, f:0}); }
 
 /* ---------- helpers ---------- */
 const $ = id => document.getElementById(id);
@@ -335,6 +350,12 @@ function renderHome(){
   const nw = pool().filter(i=> peek(i).w>0).length;
   $("wrongSub").textContent = nw ? `${nw} so far — dense list, filter, retest` : "none yet";
   $("wrongBtn").disabled = !nw;
+  const un = pool().filter(i=> peek(i).b===0).length;
+  const fl = pool().filter(i=> peek(i).f).length;
+  $("unseenSub").textContent = un ? `${un} to read or test` : "all seen";
+  $("unseenBtn").disabled = !un;
+  $("flaggedSub").textContent = fl ? `${fl} marked for help` : "none — flag during quiz or in lists";
+  $("flaggedBtn").disabled = !fl;
   $("startBtn").disabled = !c.total;
 }
 
@@ -342,7 +363,7 @@ function renderHome(){
 let queue = [], done = 0, firstTry = {ok:0, n:0}, streak = 0, best = 0,
     cur = null, picked = new Set(), recent = [], mode = "smart";
 
-function peek(i){ return S.items[i] || {b:0, due:0, s:0, w:0}; }
+function peek(i){ return S.items[i] || {b:0, due:0, s:0, w:0, f:0}; }
 function pool(){
   const p = []; DATA.forEach((q,i)=>{ if(topicFilter===null || q.t===topicFilter) p.push(i); });
   return p;
@@ -420,6 +441,7 @@ function nextCard(){
   const q = DATA[cur.i];
   paintRun();
   $("tpill").textContent = TOPICS[q.t]; $("tpill").style.background = TCOLORS[q.t];
+  paintFlag();
   $("qtext").textContent = q.q;
   $("pick").textContent = q.c.length>1 ? `Select ${q.c.length} answers` : "";
   const order = shuffle(q.o.map((_,idx)=>idx));
@@ -504,11 +526,12 @@ function finish(){
 /* ---------- wiring ---------- */
 /* ---------- browse / stats ---------- */
 let bStatus = "all", bTopic = null, bIds = [], customIds = [];
-const STATUSES = [["all","All"],["wrong","Wrong"],["learning","Learning"],["new","Unseen"],["known","Known"]];
+const STATUSES = [["all","All"],["wrong","Wrong"],["flagged","⚑ Flagged"],["learning","Learning"],["new","Unseen"],["known","Known"]];
 function bMatch(i){
   const st = peek(i);
   if(bTopic!==null && DATA[i].t!==bTopic) return false;
   if(bStatus==="wrong") return st.w>0;
+  if(bStatus==="flagged") return !!st.f;
   if(bStatus==="learning") return st.b>0 && st.b<KNOWN;
   if(bStatus==="new") return st.b===0;
   if(bStatus==="known") return st.b>=KNOWN;
@@ -529,11 +552,11 @@ function renderBrowse(){
       `<button class="tchip" aria-pressed="${bTopic===i}" data-t="${i}"><span class="dot" style="background:${TCOLORS[i]}"></span>${t}</button>`)).join("");
   $("fstatus").querySelectorAll(".tchip").forEach(b=> b.onclick = () => { bStatus = b.dataset.k; renderBrowse(); });
   $("ftopic").querySelectorAll(".tchip").forEach(b=> b.onclick = () => { bTopic = b.dataset.t==="all" ? null : +b.dataset.t; renderBrowse(); });
-  let kn=0, lr=0, nw=0, wr=0;
+  let kn=0, lr=0, nw=0, wr=0, fl=0;
   bIds.forEach(i=>{ const st=peek(i);
     if(st.b>=KNOWN) kn++; else if(st.b>0) lr++; else nw++;
-    if(st.w>0) wr++; });
-  $("bstats").textContent = `${bIds.length} questions — ${kn} known · ${lr} learning · ${nw} unseen · ${wr} ever-wrong`;
+    if(st.w>0) wr++; if(st.f) fl++; });
+  $("bstats").textContent = `${bIds.length} questions — ${kn} known · ${lr} learning · ${nw} unseen · ${wr} ever-wrong · ${fl} flagged`;
   $("testFilteredBtn").disabled = !bIds.length;
   $("testFilteredSub").textContent = bIds.length ? `quiz exactly these ${bIds.length}, most-missed first when reading` : "nothing matches this filter";
   $("wlist").innerHTML = bIds.map(i=>{
@@ -543,10 +566,24 @@ function renderBrowse(){
       <span class="tdot" style="background:${TCOLORS[q.t]}"></span>
       <div class="txt"><p class="wq">${esc(q.q)}</p><p class="wa">${ans}</p></div>
       ${st.w>0?`<span class="wx">✕${st.w}</span>`:""}
-      ${zbadge(st)}</div>`;
+      ${zbadge(st)}
+      <button class="fbtn${st.f?" on":""}" data-fi="${i}" aria-label="Flag question" aria-pressed="${st.f?"true":"false"}">⚑</button></div>`;
   }).join("");
+  $("wlist").querySelectorAll(".fbtn").forEach(b=> b.onclick = () => {
+    const i = +b.dataset.fi; it(i).f = it(i).f ? 0 : 1; save(); renderBrowse();
+  });
 }
+function paintFlag(){
+  const on = !!peek(cur.i).f;
+  const b = $("qflagBtn");
+  b.classList.toggle("on", on);
+  b.setAttribute("aria-pressed", on ? "true" : "false");
+  b.textContent = on ? "⚑ flagged" : "⚑ flag";
+}
+$("qflagBtn").onclick = () => { it(cur.i).f = it(cur.i).f ? 0 : 1; save(); paintFlag(); };
 $("wrongBtn").onclick = () => { bStatus = "wrong"; renderBrowse(); show("browse"); };
+$("unseenBtn").onclick = () => { bStatus = "new"; renderBrowse(); show("browse"); };
+$("flaggedBtn").onclick = () => { bStatus = "flagged"; renderBrowse(); show("browse"); };
 $("allBtn").onclick = () => { bStatus = "all"; renderBrowse(); show("browse"); };
 $("browseBack").onclick = () => { renderHome(); show("home"); };
 $("testFilteredBtn").onclick = () => { customIds = bIds.slice(); startSession("custom"); };
